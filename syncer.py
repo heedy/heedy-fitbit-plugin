@@ -1,6 +1,7 @@
 import logging
 from aiohttp import BasicAuth
 from dateutil import tz
+from dateutil.parser import isoparse
 from datetime import datetime, date, time, timedelta
 import json
 import asyncio
@@ -9,6 +10,25 @@ import asyncio
 def iterateDate(curdate, days):
     mdate = datetime.strptime(curdate, "%Y-%m-%d") + timedelta(days=days)
     return mdate.strftime("%Y-%m-%d")
+
+
+def series_compress(data, duration=60, zero_only=False):
+    # Elevation data has a bunch of 0s... we can simply compress all the 0s
+    dataset = []
+    curdp = {"t": data[0]["t"] - duration, "d": data[0]["d"], "td": duration}
+    for dp in data[1:]:
+        if (
+            (curdp["t"] + curdp["td"] < dp["t"] - duration)
+            or curdp["d"] != dp["d"]
+            or (curdp["d"] != 0 and zero_only)
+        ):
+            dataset.append(curdp)
+            curdp = {"t": dp["t"] - duration, "d": dp["d"], "td": duration}
+
+        else:
+            curdp["td"] += duration
+    dataset.append(curdp)
+    return dataset
 
 
 class Syncer:
@@ -67,7 +87,9 @@ class Syncer:
 
         self.log.debug("Access token updated")
 
-    async def prepare(self, key, title, description, schema, resolution="1min"):
+    async def prepare(
+        self, key, title, description, schema, resolution="1min", transform=lambda x: x
+    ):
         o = await self.app.objects(key=key)
         if len(o) == 0:
             o = [
@@ -97,6 +119,7 @@ class Syncer:
             "sync_query": sync_query,
             "key": key,
             "resolution": resolution,
+            "transform": transform,
         }
 
     async def sync_intraday(self, a):
@@ -108,20 +131,53 @@ class Syncer:
             f"https://api.fitbit.com/1/user/-/activities/{a['key']}/date/{a['sync_query'].isoformat()}/1d/{a['resolution']}.json"
         )
         dpa = data[f"activities-{a['key']}-intraday"]["dataset"]
-        formatted = [
-            {
-                "t": datetime.combine(
-                    a["sync_query"],
-                    time.fromisoformat(dp["time"]),
-                    tzinfo=self.timezone,
-                ).timestamp(),
-                "d": dp["value"],
-            }
-            for dp in dpa
-        ]
+        formatted = a["transform"](
+            [
+                {
+                    "t": datetime.combine(
+                        a["sync_query"],
+                        time.fromisoformat(dp["time"]),
+                        tzinfo=self.timezone,
+                    ).timestamp(),
+                    "d": dp["value"],
+                }
+                for dp in dpa
+            ]
+        )
+
         await series.insert_array(formatted)
         await series.kv.update(sync_query=a["sync_query"].isoformat())
         a["sync_query"] = a["sync_query"] + timedelta(days=1)
+
+    async def sync_sleep(self, a):
+        curdate = datetime.now(tz=self.timezone).date()
+        if curdate < a["sync_query"]:
+            # Skip if already finished sync
+            return
+        series = a["series"]
+        sync_query = a["sync_query"]
+        query_end = sync_query + timedelta(days=10)  # Query by 10 days
+        if curdate < query_end:
+            query_end = curdate  # ... but don't go past today
+        data = await self.get(
+            f"https://api.fitbit.com/1.2/user/-/sleep/date/{sync_query.isoformat()}/{query_end.isoformat()}.json"
+        )
+
+        for s in data["sleep"]:
+            formatted = [
+                {
+                    "t": isoparse(dp["dateTime"])
+                    .replace(tzinfo=self.timezone)
+                    .timestamp(),
+                    "d": dp["level"],
+                    "td": dp["seconds"],
+                }
+                for dp in s["levels"]["data"]
+            ]
+            await series.insert_array(formatted)
+
+        await series.kv.update(sync_query=query_end.isoformat())
+        a["sync_query"] = query_end + timedelta(days=1)
 
     async def start(self):
         self.log.debug("Starting sync")
@@ -156,17 +212,37 @@ class Syncer:
         # Start by finding all the timeseries, and initializing their metadata if necessary
         syncme = [
             await self.prepare("heart", "Heart Rate", "", {"type": "number"}, "1sec"),
-            await self.prepare("steps", "Steps", "", {"type": "number"}),
-            await self.prepare("elevation", "Elevation", "", {"type": "number"}),
+            await self.prepare(
+                "steps",
+                "Steps",
+                "",
+                {"type": "number"},
+                transform=lambda x: series_compress(x, zero_only=True),
+            ),
+            await self.prepare(
+                "elevation",
+                "Elevation",
+                "",
+                {"type": "number"},
+                transform=lambda x: series_compress(x),
+            ),
         ]
 
+        # These are not intraday, so they need to be handled manually
+        sleep = await self.prepare("sleep", "Sleep", "", {"type": "string"})
+
         i = 0
-        while i < 3 and any(
-            map(
-                lambda x: datetime.now(tz=self.timezone).date() >= x["sync_query"],
-                syncme,
-            )
+        curdate = datetime.now(tz=self.timezone).date()
+        while i < 3 and (
+            any(map(lambda x: curdate >= x["sync_query"], syncme))
+            or curdate >= sleep["sync_query"]
         ):
             i += 1
             for s in syncme:
                 await self.sync_intraday(s)
+
+            # Handle non-intraday requests
+            await self.sync_sleep(sleep)
+
+            # The current date might have changed during sync
+            curdate = datetime.now(tz=self.timezone).date()
