@@ -46,6 +46,7 @@ class Syncer:
         if cursyncer.task is not None:
             if not cursyncer.task.done():
                 logging.getLogger(f"fitbit:{appid}").debug("Sync is ongoing - not starting new sync")
+                Syncer.alock.release()
                 return # There is currently a sync happening
         # We have a free task!
         cursyncer.task = asyncio.create_task(cursyncer.start())
