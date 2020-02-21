@@ -18,11 +18,13 @@ routes = web.RouteTableDef()
 
 server_url = p.config["config"]["url"]
 
+l = logging.getLogger("fitbit")
+
 
 def redirector(x): return f"{server_url}/api/fitbit/{x}/auth"
 
-
-s = ClientSession()
+# Initialize the client session on server start, because otherwise aiohttp complains
+s = None
 
 
 async def getApp(request):
@@ -32,10 +34,13 @@ async def getApp(request):
     appid = request.match_info["app"]
     try:
         a = await p.apps[appid]
-        owner = (await a.read())["owner"]
-        if ( owner != h["X-Heedy-As"]):
-            print("BAD",h["X-Heedy-As"],owner)
-            raise "Fail"
+        appvals = await a.read()
+        if (appvals["plugin"]!="fitbit:fitbit"):
+            l.error(f"The app {appid} is not managed by fitbit")
+            raise "fail"
+        if ( appvals["owner"] != h["X-Heedy-As"] and h["X-Heedy-As"]!="heedy"):
+            l.error(f"Only the owner of {appid} can run fitbit commands on it")
+            raise "fail"
         return appid,a
     except:
         raise web.HTTPForbidden(text="You do not have access to this resource")
@@ -44,7 +49,7 @@ async def getApp(request):
 @routes.post("/app_create")
 async def app_create(request):
     evt = await request.json()
-    print("REQUEST", request.headers, evt)
+    l.debug(f"App created: {evt}")
     await p.notify(
         "setup",
         "Link your fitbit account to heedy",
@@ -71,7 +76,7 @@ async def app_create(request):
 @routes.post("/app_settings_update")
 async def app_settings_update(request):
     evt = await request.json()
-    print("REQUEST", request.headers, evt)
+    l.debug(f"Settings updated: {evt}")
     a = await p.apps[evt["app"]]
     # Read the app, getting the necessary settings
     # await a.notify("setup", "Setting up...", description="", actions=[])
@@ -103,7 +108,6 @@ async def app_settings_update(request):
 async def auth_callback(request):
     appid,a = await getApp(request)
     code = request.rel_url.query["code"]
-    print("CODE", code)
     settings = await a.settings
     response = await s.post(
         settings["refresh_uri"],
@@ -116,6 +120,7 @@ async def auth_callback(request):
     )
     resjson = await response.json()
     await a.kv.set(**resjson)
+    l.info(f"Successfully authenticated {appid}")
     await a.notifications.delete("setup")
     await a.notify(
         "sync",
@@ -123,16 +128,16 @@ async def auth_callback(request):
         description="Heedy is syncing your historical fitbit data. Due to fitbit's download limits, this might take several days. This message will disappear once synchronization is complete.",
         actions=[],
     )
-
     await Syncer.sync(s, a, appid)
 
-    # print(request.headers)
+    # redirect the user back to heedy
     raise web.HTTPFound(location=f"{server_url}/#/apps/{appid}")
 
 
 @routes.get("/api/fitbit/{app}/sync")
 async def sync(request):
     appid,a = await getApp(request)
+    l.debug(f"Sync requested for {appid}")
     await a.notify(
         "sync",
         "Synchronizing...",
@@ -145,30 +150,37 @@ async def sync(request):
 
 
 async def run_sync():
-    logging.debug("Starting sync")
+    l.debug("Starting sync of all fitbit accounts...")
     applist = await p.apps(plugin="fitbit:fitbit")
     for a in applist:
         appid = (await a.read())["id"]
         await Syncer.sync(s,a,appid)
 
 async def syncloop():
-    logging.debug("Waiting 10 seconds before syncing")
+    l.debug("Waiting 10 seconds before syncing")
     await asyncio.sleep(10)
     while True:
         try:
             await run_sync()
         except Exception as e:
-            print(e)
+            l.error(e)
         wait_until = p.config["config"]["plugin"]["fitbit"]["settings"]["sync_every"]
-        logging.debug(f"Waiting {wait_until} seconds until next sync initiated")
+        l.debug(f"Waiting {wait_until} seconds until next auto-sync initiated")
         await asyncio.sleep(wait_until)
 
 async def startup(app):
+    global s
+    s = ClientSession()
     asyncio.create_task(syncloop())
+
+async def cleanup(app):
+    await s.close()
+    await p.session.close()
 
 app = web.Application()
 app.add_routes(routes)
 app.on_startup.append(startup)
+app.on_cleanup.append(cleanup)
 
 # Runs the server over a unix domain socket. The socket is automatically placed in the data folder,
 # and not the plugin folder.

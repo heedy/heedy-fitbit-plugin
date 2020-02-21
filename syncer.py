@@ -45,7 +45,7 @@ class Syncer:
         cursyncer = Syncer.active[appid]
         if cursyncer.task is not None:
             if not cursyncer.task.done():
-                logging.debug("Sync is ongoing - not starting new sync")
+                logging.getLogger(f"fitbit:{appid}").debug("Sync is ongoing - not starting new sync")
                 return # There is currently a sync happening
         # We have a free task!
         cursyncer.task = asyncio.create_task(cursyncer.start())
@@ -69,7 +69,7 @@ class Syncer:
     async def get(self, uri):
         self.log.debug(f"Querying: {uri}")
         response = await self.session.get(uri, headers=self.auth)
-        print(response.headers)
+        # print(response.headers)
         if response.status >= 400:
             if response.status == 429:
                 # Add on an extra couple seconds to make sure their end registers the reset
@@ -266,9 +266,9 @@ class Syncer:
             # The current date might have changed during sync
             curdate = datetime.now(tz=self.timezone).date()
 
-        self.log.debug("Sync finished")
         await self.app.notifications.delete("sync")
 
         await Syncer.alock.acquire()
         self.task = None
         Syncer.alock.release()
+        self.log.debug("Sync finished")
