@@ -153,7 +153,7 @@ async def run_sync():
     l.debug("Starting sync of all fitbit accounts...")
     applist = await p.apps(plugin="fitbit:fitbit")
     for a in applist:
-        appid = (await a.read())["id"]
+        appid = a["id"]
         await Syncer.sync(s,a,appid)
 
 async def syncloop():
