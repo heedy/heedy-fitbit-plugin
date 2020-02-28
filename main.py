@@ -24,7 +24,6 @@ def redirector(x): return f"{server_url}/api/fitbit/{x}/auth"
 # Initialize the client session on server start, because otherwise aiohttp complains
 s = None
 
-
 async def getApp(request):
     h = request.headers
     if h["X-Heedy-As"] == "public" or "/" in h["X-Heedy-As"]:

@@ -1,8 +1,34 @@
 # Heedy Fitbit Integration
 
-This plugin automatically downloads all of your Fitbit data into Heedy, and keeps it in sync. 
+This plugin automatically syncs all of your Fitbit data with Heedy.
 
-To install it, upload the release zip folder to heedy, and enable the resulting plugin. This will allow you to create a "fitbit" app, which will instruct you how to link your account.
+It guides you through setting up a fitbit app key, and handles all authentication for you.
+
 
 ![Screenshot of sleep data](./screenshot1.png)
 ![Screenshot of heart-rate data](./screenshot2.png)
+
+
+## Building
+
+```
+git clone https://github.com/heedy/heedy-fitbit-plugin
+cd heedy-fitbit-plugin
+make
+```
+
+The plugin zip file will be created at `dist/heedy-fitbit-plugin-{VERSION}.zip`. It can be installed by uploading to heedy from the UI.
+
+### Developing
+
+To develop the plugin, create a heedy database, run the build in debug mode (which watches files for changes and auto-updates them), and link the build to heedy's plugin directory:
+
+```
+heedy create testdb
+mkdir testdb/plugins
+make debug
+# In a different terminal (since make debug watches files):
+ln -s ${pwd}/dist/fitbit ./testdb/plugins/fitbit
+```
+
+At this point, you should edit `testdb/heedy.conf` to add the fitbit plugin. Any changes you make to the Python files require a heedy restart. 
