@@ -3,9 +3,7 @@ from aiohttp import web, BasicAuth, ClientSession
 import logging
 import urllib.parse
 import json
-import dateparser
 from datetime import datetime, date, time, timedelta
-from dateutil import tz
 
 from syncer import Syncer
 import asyncio

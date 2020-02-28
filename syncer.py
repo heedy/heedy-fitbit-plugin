@@ -35,7 +35,7 @@ class Syncer:
     active = {}
     alock = asyncio.Lock()
 
-    buffer_days = 7
+    buffer_days = 10
 
     @staticmethod
     async def sync(session,app,appid):
@@ -106,7 +106,7 @@ class Syncer:
         self.log.debug("Access token updated")
 
     async def prepare(
-        self, key, tags, title, description, schema, icon="", owner_scope="read", resolution="1min", transform=lambda x: x
+        self, key, tags, title, description, schema, icon="", owner_scope="read", resolution="1min", transform=lambda x: x,ignore_zero=False
     ):
         o = await self.app.objects(key=key)
         if len(o) == 0:
@@ -126,19 +126,21 @@ class Syncer:
             sync_query = date.fromisoformat(sync_query) - timedelta(
                 days=self.buffer_days
             )
-        # Next, try comparing to the most recent datapoint in the series
-        lastdp = await series[-1:]
-        if len(lastdp) > 0:
+        # Next, try comparing to the most recent several datapoints in the series, to check how far back we actually need to query
+        lastdp = await series[-10:]
+        for dp in reversed(lastdp):
             ts_date = datetime.fromtimestamp(
-                lastdp[0]["t"], tz=self.timezone).date()
-            if ts_date > sync_query:
+                dp["t"], tz=self.timezone).date()
+            if ts_date > sync_query and (dp["d"]!=0 or not ignore_zero):
                 sync_query = ts_date
+                break
         return {
             "series": series,
             "sync_query": sync_query,
             "key": key,
             "resolution": resolution,
             "transform": transform,
+            "ignore_zero": ignore_zero
         }
 
     async def sync_intraday(self, a):
@@ -163,8 +165,10 @@ class Syncer:
                 for dp in dpa
             ]
         )
-
-        await series.insert_array(formatted)
+        # Add the data if we're not ignoring zeros
+        if len(formatted)>0:
+            if len(formatted) > 1 or formatted[0]["d"]!=0 or not a["ignore_zero"]:
+                await series.insert_array(formatted)
         await series.kv.update(sync_query=a["sync_query"].isoformat())
         a["sync_query"] = a["sync_query"] + timedelta(days=1)
 
@@ -240,6 +244,7 @@ class Syncer:
                     {"type": "number"},
                     icon="fas fa-shoe-prints",
                     transform=lambda x: series_compress(x, zero_only=True),
+                    ignore_zero=True
                 ),
                 await self.prepare(
                     "elevation","fitbit elevation",
@@ -248,6 +253,7 @@ class Syncer:
                     {"type": "number"},
                     icon="fas fa-mountain",
                     transform=lambda x: series_compress(x),
+                    ignore_zero=True
                 ),
             ]
 
