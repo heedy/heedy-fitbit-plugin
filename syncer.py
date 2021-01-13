@@ -25,9 +25,32 @@ def series_compress(data, duration=60, zero_only=False):
             dataset.append(curdp)
             curdp = {"t": dp["t"] - duration, "d": dp["d"], "dt": duration}
 
+            # If the ranges intersect, fix it in the simplest way possible.
+            if dataset[-1]["t"] + dataset[-1]["dt"] > curdp["t"]:
+                dataset[-1]["dt"] = curdp["t"] - dataset[-1]["t"]
+
         else:
-            curdp["dt"] += duration
+            curdp["dt"] = dp["t"] - curdp["t"]
     dataset.append(curdp)
+    return dataset
+
+
+def sanity_fix(data):
+    data.sort(key=lambda d: d["t"])  # Sort by timestamps
+
+    dataset = [data[0]]
+    for dp in data[1:]:
+        if dp["t"] == dataset[-1]["t"]:
+            # Next replace each datapoint with the most recent one of that timestamp
+            dataset[-1] = dp
+        elif "dt" in dataset[-1] and dataset[-1]["t"] + dataset[-1]["dt"] > dp["t"]:
+            # The timestamps interfere with each other - we modify the previous one to have
+            # a smaller duration, and then insert the datapoint
+            dataset[-1]["dt"] = dp["t"] - dataset[-1]["t"]
+            dataset.append(dp)
+        else:
+            dataset.append(dp)
+
     return dataset
 
 
@@ -38,21 +61,22 @@ class Syncer:
     buffer_days = 10
 
     @staticmethod
-    async def sync(session,app,appid):
+    async def sync(session, app, appid):
         await Syncer.alock.acquire()
         if not appid in Syncer.active:
-            Syncer.active[appid] = Syncer(session,app,appid)
+            Syncer.active[appid] = Syncer(session, app, appid)
         cursyncer = Syncer.active[appid]
         if cursyncer.task is not None:
             if not cursyncer.task.done():
-                logging.getLogger(f"fitbit:{appid}").debug("Sync is ongoing - not starting new sync")
+                logging.getLogger(f"fitbit:{appid}").debug(
+                    "Sync is ongoing - not starting new sync"
+                )
                 Syncer.alock.release()
-                return # There is currently a sync happening
+                return  # There is currently a sync happening
         # We have a free task!
         cursyncer.task = asyncio.create_task(cursyncer.start())
-        
-        Syncer.alock.release()
 
+        Syncer.alock.release()
 
     def __init__(self, session, app, appid):
         self.app = app
@@ -66,6 +90,19 @@ class Syncer:
         self.auth = {
             "Authorization": f"{self.kv['token_type']} {self.kv['access_token']}"
         }
+
+    def sanity_check(self, data):
+        # Makes sure that the data is both sorted and does not have overlapping durations,
+        # which happens when the tracker switches time (like when travelling or dst)
+        for i in range(1, len(data)):
+            if "dt" in data[i - 1] and data[i - 1]["dt"] > 0:
+                if data[i - 1]["t"] + data[i - 1]["dt"] > data[i]["t"]:
+                    self.log.warn(f"SANITY CHECK FAILED {i} {data[i - 1]} {data[i]}")
+                    return sanity_fix(data)
+            elif data[i - 1]["t"] >= data[i]["t"]:
+                self.log.warn(f"SANITY CHECK FAILED {i} {data[i - 1]} {data[i]}")
+                return sanity_fix(data)
+        return data
 
     async def get(self, uri):
         self.log.debug(f"Querying: {uri}")
@@ -106,13 +143,29 @@ class Syncer:
         self.log.debug("Access token updated")
 
     async def prepare(
-        self, key, tags, title, description, schema, icon="", owner_scope="read", resolution="1min", transform=lambda x: x,ignore_zero=False
+        self,
+        key,
+        tags,
+        title,
+        description,
+        schema,
+        icon="",
+        owner_scope="read",
+        resolution="1min",
+        transform=lambda x: x,
+        ignore_zero=False,
     ):
         o = await self.app.objects(key=key)
         if len(o) == 0:
             o = [
                 await self.app.objects.create(
-                    title, description=description, key=key, tags=tags, meta={"schema": schema}, icon=icon, owner_scope=owner_scope
+                    title,
+                    description=description,
+                    key=key,
+                    tags=tags,
+                    meta={"schema": schema},
+                    icon=icon,
+                    owner_scope=owner_scope,
                 )
             ]
 
@@ -129,9 +182,8 @@ class Syncer:
         # Next, try comparing to the most recent several datapoints in the series, to check how far back we actually need to query
         lastdp = await series[-10:]
         for dp in reversed(lastdp):
-            ts_date = datetime.fromtimestamp(
-                dp["t"], tz=self.timezone).date()
-            if ts_date > sync_query and (dp["d"]!=0 or not ignore_zero):
+            ts_date = datetime.fromtimestamp(dp["t"], tz=self.timezone).date()
+            if ts_date > sync_query and (dp["d"] != 0 or not ignore_zero):
                 sync_query = ts_date
                 break
         return {
@@ -140,7 +192,7 @@ class Syncer:
             "key": key,
             "resolution": resolution,
             "transform": transform,
-            "ignore_zero": ignore_zero
+            "ignore_zero": ignore_zero,
         }
 
     async def sync_intraday(self, a):
@@ -153,21 +205,23 @@ class Syncer:
         )
         dpa = data[f"activities-{a['key']}-intraday"]["dataset"]
         formatted = a["transform"](
-            [
-                {
-                    "t": datetime.combine(
-                        a["sync_query"],
-                        time.fromisoformat(dp["time"]),
-                        tzinfo=self.timezone,
-                    ).timestamp(),
-                    "d": dp["value"],
-                }
-                for dp in dpa
-            ]
+            self.sanity_check(
+                [
+                    {
+                        "t": datetime.combine(
+                            a["sync_query"],
+                            time.fromisoformat(dp["time"]),
+                            tzinfo=self.timezone,
+                        ).timestamp(),
+                        "d": dp["value"],
+                    }
+                    for dp in dpa
+                ]
+            )
         )
         # Add the data if we're not ignoring zeros
-        if len(formatted)>0:
-            if len(formatted) > 1 or formatted[0]["d"]!=0 or not a["ignore_zero"]:
+        if len(formatted) > 0:
+            if len(formatted) > 1 or formatted[0]["d"] != 0 or not a["ignore_zero"]:
                 await series.insert_array(formatted)
         await series.kv.update(sync_query=a["sync_query"].isoformat())
         a["sync_query"] = a["sync_query"] + timedelta(days=1)
@@ -197,7 +251,7 @@ class Syncer:
                 }
                 for dp in s["levels"]["data"]
             ]
-            await series.insert_array(formatted)
+            await series.insert_array(self.sanity_check(formatted))
 
         await series.kv.update(sync_query=query_end.isoformat())
         a["sync_query"] = query_end + timedelta(days=1)
@@ -236,29 +290,46 @@ class Syncer:
 
             # Start by finding all the timeseries, and initializing their metadata if necessary
             syncme = [
-                await self.prepare("heart","fitbit heartrate", "Heart Rate", "", {"type": "number"}, icon="fas fa-heartbeat", resolution="1sec"),
                 await self.prepare(
-                    "steps","fitbit steps",
+                    "heart",
+                    "fitbit heartrate",
+                    "Heart Rate",
+                    "",
+                    {"type": "number"},
+                    icon="fas fa-heartbeat",
+                    resolution="1sec",
+                ),
+                await self.prepare(
+                    "steps",
+                    "fitbit steps",
                     "Steps",
                     "",
                     {"type": "number"},
                     icon="fas fa-shoe-prints",
                     transform=lambda x: series_compress(x, zero_only=True),
-                    ignore_zero=True
+                    ignore_zero=True,
                 ),
                 await self.prepare(
-                    "elevation","fitbit elevation",
+                    "elevation",
+                    "fitbit elevation",
                     "Elevation",
                     "",
                     {"type": "number"},
                     icon="fas fa-mountain",
                     transform=lambda x: series_compress(x),
-                    ignore_zero=True
+                    ignore_zero=True,
                 ),
             ]
 
             # These are not intraday, so they need to be handled manually
-            sleep = await self.prepare("sleep","fitbit sleep", "Sleep", "", {"type": "string"}, icon="fas fa-bed")
+            sleep = await self.prepare(
+                "sleep",
+                "fitbit sleep",
+                "Sleep",
+                "",
+                {"type": "string"},
+                icon="fas fa-bed",
+            )
 
             curdate = datetime.now(tz=self.timezone).date()
             while (
@@ -275,15 +346,24 @@ class Syncer:
                 curdate = datetime.now(tz=self.timezone).date()
 
             await self.app.notifications.delete("sync")
+            await self.app.notifications.delete("err")
 
             await Syncer.alock.acquire()
             self.task = None
             Syncer.alock.release()
             self.log.debug("Sync finished")
-        except:
+        except Exception as e:
             await Syncer.alock.acquire()
             self.task = None
             Syncer.alock.release()
             self.log.exception("Sync failed")
             await self.app.notifications.delete("sync")
-            
+            await self.app.notifications.notify(
+                "err",
+                "Error syncing fitbit data",
+                **{
+                    "description": f"Sync failed with the following exception:\n```\n{str(e)}\n```\nWill try again later.",
+                    "global": True,
+                    "type": "error",
+                },
+            )
