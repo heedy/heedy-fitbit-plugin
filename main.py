@@ -37,10 +37,10 @@ async def getApp(request):
     try:
         a = await p.apps[appid]
         appvals = await a.read()
-        if (appvals["plugin"] != "fitbit:fitbit"):
+        if appvals["plugin"] != "fitbit:fitbit":
             l.error(f"The app {appid} is not managed by fitbit")
             raise "fail"
-        if (appvals["owner"] != h["X-Heedy-As"] and h["X-Heedy-As"] != "heedy"):
+        if appvals["owner"] != h["X-Heedy-As"] and h["X-Heedy-As"] != "heedy":
             l.error(f"Only the owner of {appid} can run fitbit commands on it")
             raise "fail"
         return appid, a
@@ -52,7 +52,7 @@ async def getApp(request):
 async def app_create(request):
     evt = await request.json()
     l.debug(f"App created: {evt}")
-    redir = redirector(evt['app'])
+    redir = redirector(evt["app"])
     msg = f"To give heedy access to your data, you need to register an application with fitbit. The application must be of 'personal' type, and must use the following callback URL: `{redir}`"
     msg += "\n\nAfter registering an application with fitbit, copy its details into your fitbit app's settings."
 
@@ -98,7 +98,7 @@ async def app_settings_update(request):
 
     desc = "Now that heedy has fitbit app credentials, you need to give it access to your data."
 
-    if redirector(evt['app']).startswith("http://localhost"):
+    if redirector(evt["app"]).startswith("http://localhost"):
         desc += f"\n\n**NOTE:** Due to http restrictions on fitbit's servers, you must press the Authorize button from the computer running heedy (i.e. heedy must be accessible at `http://localhost:{p.config['config']['port']}`). If running heedy on a remote server, you will need to forward port `{p.config['config']['port']}` to `localhost:{p.config['config']['port']}` for authorization to succeed."
 
     await a.notify(
@@ -155,7 +155,8 @@ async def auth_callback(request):
         raise web.HTTPFound(location=f"{server_url}/#/apps/{appid}")
     # Makes it work also when ssh port forwarding the server
     raise web.HTTPFound(
-        location=f"http://localhost:{p.config['config']['port']}/#/apps/{appid}")
+        location=f"http://localhost:{p.config['config']['port']}/#/apps/{appid}"
+    )
 
 
 @routes.get("/api/fitbit/{app}/sync")
@@ -189,7 +190,7 @@ async def syncloop():
             await run_sync()
         except Exception as e:
             l.error(e)
-        wait_until = p.config["config"]["plugin"]["fitbit"]["settings"]["sync_every"]
+        wait_until = p.config["config"]["plugin"]["fitbit"]["config"]["sync_every"]
         l.debug(f"Waiting {wait_until} seconds until next auto-sync initiated")
         await asyncio.sleep(wait_until)
 
@@ -203,6 +204,7 @@ async def startup(app):
 async def cleanup(app):
     await s.close()
     await p.session.close()
+
 
 app = web.Application()
 app.add_routes(routes)
