@@ -22,7 +22,10 @@ l = logging.getLogger("fitbit")
 def redirector(x):
     if server_url.startswith("https://"):
         return f"{server_url}/api/fitbit/{x}/auth"
-    return f"http://localhost:{p.config['config']['port']}/api/fitbit/{x}/auth"
+    addr = p.config["config"]["port"]
+    if addr.startswith(":"):
+        addr = "localhost" + addr
+    return f"http://{addr}/api/fitbit/{x}/auth"
 
 
 # Initialize the client session on server start, because otherwise aiohttp complains

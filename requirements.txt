@@ -1,4 +1,4 @@
-heedy>=0.0.8
+heedy>=0.1.2
 dateparser
 aiohttp
 python-dateutil
