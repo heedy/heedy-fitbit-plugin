@@ -16,15 +16,18 @@ routes = web.RouteTableDef()
 
 server_url = p.config["config"]["url"]
 
+addr = p.config["config"]["addr"]
+if addr.startswith(":"):
+    addr = "localhost" + addr
+
+port = p.config["config"]["addr"].split(":")[1]
+
 l = logging.getLogger("fitbit")
 
 
 def redirector(x):
     if server_url.startswith("https://"):
         return f"{server_url}/api/fitbit/{x}/auth"
-    addr = p.config["config"]["port"]
-    if addr.startswith(":"):
-        addr = "localhost" + addr
     return f"http://{addr}/api/fitbit/{x}/auth"
 
 
@@ -51,37 +54,42 @@ async def getApp(request):
         raise web.HTTPForbidden(text="You do not have access to this resource")
 
 
+async def notify_register(app):
+    l.debug(f"Creating setup notification for {app}")
+    redir = redirector(app)
+    msg = f"To give heedy access to your data, you need to register an application with fitbit. The application must be of 'personal' type, and must use the following callback URL: `{redir}`"
+    msg += "\n\nAfter registering an application with fitbit, copy its details into your fitbit app's settings."
+    await p.notify(
+        "setup",
+        "Link your fitbit account to heedy",
+        app=app,
+        _global=True,
+        description=msg,
+        actions=[
+            {
+                "title": "Register App",
+                "href": "https://dev.fitbit.com/apps/new",
+                "new_window": True,
+            },
+            {
+                "title": "Settings",
+                "icon": "fas fa-cog",
+                "href": f"#/apps/{app}/settings",
+            },
+        ],
+        dismissible=False,
+    )
+
+
 @routes.post("/app_create")
 async def app_create(request):
     evt = await request.json()
     l.debug(f"App created: {evt}")
-    redir = redirector(evt["app"])
-    msg = f"To give heedy access to your data, you need to register an application with fitbit. The application must be of 'personal' type, and must use the following callback URL: `{redir}`"
-    msg += "\n\nAfter registering an application with fitbit, copy its details into your fitbit app's settings."
 
-    # Try creating the notification 5 times, in case the database is still committing the app
+    # Try creating the notification 10 times, in case the database is still committing the app
     for i in range(10):
         try:
-            await p.notify(
-                "setup",
-                "Link your fitbit account to heedy",
-                app=evt["app"],
-                _global=True,
-                description=msg,
-                actions=[
-                    {
-                        "title": "Register App",
-                        "href": "https://dev.fitbit.com/apps/new",
-                        "new_window": True,
-                    },
-                    {
-                        "title": "Settings",
-                        "icon": "fas fa-cog",
-                        "href": f"#/apps/{evt['app']}/settings",
-                    },
-                ],
-                dismissible=False,
-            )
+            await notify_register(evt["app"])
             return web.Response(text="ok")
         except:
             l.warning("Failed to notify on app create")
@@ -102,7 +110,7 @@ async def app_settings_update(request):
     desc = "Now that heedy has fitbit app credentials, you need to give it access to your data."
 
     if redirector(evt["app"]).startswith("http://localhost"):
-        desc += f"\n\n**NOTE:** Due to http restrictions on fitbit's servers, you must press the Authorize button from the computer running heedy (i.e. heedy must be accessible at `http://localhost:{p.config['config']['port']}`). If running heedy on a remote server, you will need to forward port `{p.config['config']['port']}` to `localhost:{p.config['config']['port']}` for authorization to succeed."
+        desc += f"\n\n**NOTE:** Due to http restrictions on fitbit's servers, you must press the Authorize button from the computer running heedy (i.e. heedy must be accessible at `http://localhost:{port}`). If running heedy on a remote server, you will need to forward port `{port}` to `localhost:{port}` for authorization to succeed."
 
     await a.notify(
         "setup",
@@ -157,9 +165,7 @@ async def auth_callback(request):
     if server_url.startswith("https://"):
         raise web.HTTPFound(location=f"{server_url}/#/apps/{appid}")
     # Makes it work also when ssh port forwarding the server
-    raise web.HTTPFound(
-        location=f"http://localhost:{p.config['config']['port']}/#/apps/{appid}"
-    )
+    raise web.HTTPFound(location=f"http://{addr}/#/apps/{appid}")
 
 
 @routes.get("/api/fitbit/{app}/sync")
@@ -182,7 +188,12 @@ async def run_sync():
     applist = await p.apps(plugin="fitbit:fitbit")
     for a in applist:
         appid = a["id"]
-        await Syncer.sync(s, a, appid)
+        # Make sure the app has an access token ready
+        if (await a.kv["access_token"]) is None:
+            # If not, notify to create one
+            await notify_register(appid)
+        else:
+            await Syncer.sync(s, a, appid)
 
 
 async def syncloop():
