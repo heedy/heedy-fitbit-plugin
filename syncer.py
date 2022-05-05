@@ -203,7 +203,12 @@ class Syncer:
         data = await self.get(
             f"https://api.fitbit.com/1/user/-/activities/{a['key']}/date/{a['sync_query'].isoformat()}/1d/{a['resolution']}.json"
         )
-        dpa = data[f"activities-{a['key']}-intraday"]["dataset"]
+        datakey = f"activities-{a['key']}-intraday"
+        if datakey not in data:
+            self.log.warn(f"No data for {a['key']}")
+            a["sync_query"] = datetime.now(tz=self.timezone).date()
+            return
+        dpa = data[datakey]["dataset"]
         formatted = a["transform"](
             self.sanity_check(
                 [
