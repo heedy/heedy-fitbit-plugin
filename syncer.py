@@ -206,7 +206,7 @@ class Syncer:
         datakey = f"activities-{a['key']}-intraday"
         if datakey not in data:
             self.log.warn(f"No data for {a['key']}")
-            a["sync_query"] = datetime.now(tz=self.timezone).date()
+            a["sync_query"] = datetime.now(tz=self.timezone).date() + timedelta(days=1)
             return
         dpa = data[datakey]["dataset"]
         formatted = a["transform"](
@@ -240,7 +240,7 @@ class Syncer:
         sync_query = a["sync_query"]
         query_end = sync_query + timedelta(days=10)  # Query by 10 days
         if curdate < query_end:
-            query_end = curdate  # ... but don't go past today
+            query_end = curdate   # ... but don't go past today
         data = await self.get(
             f"https://api.fitbit.com/1.2/user/-/sleep/date/{sync_query.isoformat()}/{query_end.isoformat()}.json"
         )
