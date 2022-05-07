@@ -11,12 +11,12 @@ It guides you through setting up a fitbit app key, and handles all authenticatio
 ### Supported fitbit data
 **Available in this plugin**
 - Steps
-- Heart rate
+- Raw heart rate
 - Sleep stages
+- Body data (weight, body fat, BMI)
 
 **Missing but possible** (contributions welcome!)
 - Activities
-- Weight, body fat, BMI
 - Food
 - Resting heart rate (derivable from raw heart rate)
 - Heart rate variability (derivable from raw heart rate)
