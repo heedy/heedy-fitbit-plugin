@@ -335,7 +335,7 @@ class Syncer:
             # it is assumed that *all* data has been synced until time t, so we can just start with time t, instead of backtracking a whole week.
 
             # Start by finding all the timeseries, and initializing their metadata if necessary
-            syncme = [
+            intraday_activities = [
                 await self.prepare(
                     "heart",
                     "fitbit heartrate",
@@ -413,7 +413,7 @@ class Syncer:
                     await self.sync_intraday_activities(s)
 
                 # Handle non-intraday requests
-                # await self.sync_sleep(sleep) # todo
+                await self.sync_sleep(sleep)
                 await self.sync_body_data(body_data)
 
                 # The current date might have changed during sync
