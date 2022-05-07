@@ -407,6 +407,7 @@ class Syncer:
             curdate = datetime.now(tz=self.timezone).date()
             while (
                 any(map(lambda x: curdate >= x["sync_query"], intraday_activities))
+                or any(map(lambda x: curdate >= x["sync_query"], body_data.values()))
                 or curdate >= sleep["sync_query"]
             ):
                 for s in intraday_activities:
