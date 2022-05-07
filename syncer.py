@@ -240,34 +240,37 @@ class Syncer:
         if curdate < sync_query:
             # Skip if already finished sync
             return
-        query_end = sync_query + timedelta(days=10)  # Query by 10 days  # todo how many days are best?
+        query_end = sync_query + timedelta(days=30)  # Query by 30 days  # todo how many days are best?
         if curdate < query_end:
             query_end = curdate  # ... but don't go past today
-        data = await self.get(
+
+        api_response = await self.get(
             f"https://api.fitbit.com/1/user/-/body/log/weight/date/{sync_query.isoformat()}/{query_end.isoformat()}.json"
         )
 
-        # todo switch for loops to bulk-insert?
-        for s in data["weight"]:
-            datetime_string = f"{s['date']}T{s['time']}" 
-            timestamp = isoparse(datetime_string).replace(tzinfo=self.timezone).timestamp()
+        for data_key, a in body_data_config.items():
+            series = a["series"]
+            formatted_values = []
 
-            for data_key, a in body_data_config.items():
+            for s in api_response["weight"]:
+                datetime_string = f"{s['date']}T{s['time']}"
+
                 if data_key not in s:
-                    self.log.info(f"Skipping {data_key} because it's not in the response")
+                    self.log.info(f"{datetime_string}: Skipping {data_key} because it's not in the response")
                     continue
-                series = a["series"]
-                formatted = {
+
+                timestamp = isoparse(datetime_string).replace(tzinfo=self.timezone).timestamp()
+                formatted_values.append({
                     "t": timestamp,
                     "d": s[data_key],
-                }
-                self.log.debug(f"{data_key}: {formatted}")
-                await series.insert(formatted)
+                })
 
-        new_sync_query = query_end + timedelta(days=1)
-        for _, a in body_data_config.items():
+            self.log.debug(f"{data_key}: {formatted_values}")
+            await series.insert_array(self.sanity_check(formatted_values))
+
+            new_sync_query = query_end + timedelta(days=1)
             a["sync_query"] = new_sync_query
-            await a["series"].kv.update(sync_query=new_sync_query)
+            await a["series"].kv.update(sync_query=new_sync_query.isoformat())
 
     async def sync_sleep(self, a):
         curdate = datetime.now(tz=self.timezone).date()
