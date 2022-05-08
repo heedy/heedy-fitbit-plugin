@@ -195,7 +195,8 @@ class Syncer:
             "ignore_zero": ignore_zero,
         }
 
-    async def sync_intraday(self, a):
+    async def sync_intraday_activities(self, a):
+        # this uses the intraday API endpoint: https://dev.fitbit.com/build/reference/web-api/intraday/
         if datetime.now(tz=self.timezone).date() < a["sync_query"]:
             # Skip if already finished sync
             return
@@ -230,6 +231,46 @@ class Syncer:
                 await series.insert_array(formatted)
         await series.kv.update(sync_query=a["sync_query"].isoformat())
         a["sync_query"] = a["sync_query"] + timedelta(days=1)
+
+    async def sync_body_data(self, body_data_config):
+        # we fetch multiple body data series with only a single API request.
+        # As a result, for the sync_query, we just use the sync query of the weight
+        sync_query = body_data_config["weight"]["sync_query"]
+        curdate = datetime.now(tz=self.timezone).date()
+        if curdate < sync_query:
+            # Skip if already finished sync
+            return
+        query_end = sync_query + timedelta(days=30)  # Query by 30 days
+        if curdate < query_end:
+            query_end = curdate  # ... but don't go past today
+
+        api_response = await self.get(
+            f"https://api.fitbit.com/1/user/-/body/log/weight/date/{sync_query.isoformat()}/{query_end.isoformat()}.json"
+        )
+
+        for data_key, a in body_data_config.items():
+            series = a["series"]
+            formatted_values = []
+
+            for s in api_response["weight"]:
+                datetime_string = f"{s['date']}T{s['time']}"
+
+                if data_key not in s:
+                    self.log.info(f"{datetime_string}: Skipping {data_key} because it's not in the response")
+                    continue
+
+                timestamp = isoparse(datetime_string).replace(tzinfo=self.timezone).timestamp()
+                formatted_values.append({
+                    "t": timestamp,
+                    "d": s[data_key],
+                })
+
+            self.log.debug(f"{data_key}: {formatted_values}")
+            await series.insert_array(self.sanity_check(formatted_values))
+
+            new_sync_query = query_end + timedelta(days=1)
+            a["sync_query"] = new_sync_query
+            await a["series"].kv.update(sync_query=new_sync_query.isoformat())
 
     async def sync_sleep(self, a):
         curdate = datetime.now(tz=self.timezone).date()
@@ -294,7 +335,7 @@ class Syncer:
             # it is assumed that *all* data has been synced until time t, so we can just start with time t, instead of backtracking a whole week.
 
             # Start by finding all the timeseries, and initializing their metadata if necessary
-            syncme = [
+            intraday_activities = [
                 await self.prepare(
                     "heart",
                     "fitbit heartrate",
@@ -336,16 +377,45 @@ class Syncer:
                 icon="fas fa-bed",
             )
 
+            body_data = {
+                "weight": await self.prepare(
+                    "weight",
+                    "fitbit weight",
+                    "Weight",
+                    "",
+                    {"type": "number"},
+                    icon="fas fa-weight",
+                ),
+                "bmi": await self.prepare(
+                    "bmi",
+                    "fitbit bmi",
+                    "BMI",
+                    "",
+                    {"type": "number"},
+                    icon="fas fa-ruler-combined",
+                ),
+                "fat": await self.prepare(
+                    "body_fat",
+                    "fitbit bodyfat",
+                    "Body Fat",
+                    "",
+                    {"type": "number"},
+                    icon="fas fa-percent",
+                )
+            }
+
             curdate = datetime.now(tz=self.timezone).date()
             while (
-                any(map(lambda x: curdate >= x["sync_query"], syncme))
+                any(map(lambda x: curdate >= x["sync_query"], intraday_activities))
+                or any(map(lambda x: curdate >= x["sync_query"], body_data.values()))
                 or curdate >= sleep["sync_query"]
             ):
-                for s in syncme:
-                    await self.sync_intraday(s)
+                for s in intraday_activities:
+                    await self.sync_intraday_activities(s)
 
                 # Handle non-intraday requests
                 await self.sync_sleep(sleep)
+                await self.sync_body_data(body_data)
 
                 # The current date might have changed during sync
                 curdate = datetime.now(tz=self.timezone).date()

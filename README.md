@@ -7,16 +7,17 @@ It guides you through setting up a fitbit app key, and handles all authenticatio
 
 ![Screenshot of sleep data](./screenshot1.png)
 ![Screenshot of heart-rate data](./screenshot2.png)
+![Screenshot of weight data](./screenshot3.png)
 
 ### Supported fitbit data
 **Available in this plugin**
 - Steps
-- Heart rate
+- Raw heart rate
 - Sleep stages
+- Body data (weight, body fat, BMI)
 
 **Missing but possible** (contributions welcome!)
 - Activities
-- Weight, body fat, BMI
 - Food
 - Resting heart rate (derivable from raw heart rate)
 - Heart rate variability (derivable from raw heart rate)
