@@ -380,23 +380,23 @@ class Syncer:
             body_data = {
                 "weight": await self.prepare(
                     "weight",
-                    "fitbit body weight",
+                    "fitbit weight",
                     "Weight",
                     "",
                     {"type": "number"},
-                    icon="fas fa-weight-scale",
+                    icon="fas fa-weight",
                 ),
                 "bmi": await self.prepare(
                     "bmi",
-                    "fitbit body bmi",
+                    "fitbit bmi",
                     "BMI",
                     "",
                     {"type": "number"},
-                    icon="fas fa-ruler-triangle",
+                    icon="fas fa-ruler-combined",
                 ),
                 "fat": await self.prepare(
                     "body_fat",
-                    "fitbit body fat",
+                    "fitbit bodyfat",
                     "Body Fat",
                     "",
                     {"type": "number"},
