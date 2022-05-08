@@ -7,6 +7,7 @@ It guides you through setting up a fitbit app key, and handles all authenticatio
 
 ![Screenshot of sleep data](./screenshot1.png)
 ![Screenshot of heart-rate data](./screenshot2.png)
+![Screenshot of weight data](./screenshot3.png)
 
 ### Supported fitbit data
 **Available in this plugin**
