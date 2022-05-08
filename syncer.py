@@ -240,7 +240,7 @@ class Syncer:
         if curdate < sync_query:
             # Skip if already finished sync
             return
-        query_end = sync_query + timedelta(days=30)  # Query by 30 days  # todo how many days are best?
+        query_end = sync_query + timedelta(days=30)  # Query by 30 days
         if curdate < query_end:
             query_end = curdate  # ... but don't go past today
 
